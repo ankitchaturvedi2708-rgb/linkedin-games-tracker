@@ -53,9 +53,17 @@
           const submissionsData = await submissionsRes.json();
           const historyData = await historyRes.json();
 
-          if (playersData) this.players = playersData;
-          if (submissionsData) this.submissions = submissionsData;
-          if (historyData) this.history = historyData;
+          if (playersData && Array.isArray(playersData)) this.players = playersData;
+          if (submissionsData && typeof submissionsData === 'object') this.submissions = submissionsData;
+          if (historyData && Array.isArray(historyData)) this.history = historyData;
+
+          // Update player scores if a player is selected
+          if (this.selectedPlayer) {
+            const existingSubmission = this.submissions[`${this.currentDate}-${this.selectedPlayer}`];
+            if (existingSubmission) {
+              this.playerScores = { ...existingSubmission.scores };
+            }
+          }
 
           this.render();
         } catch (error) {
@@ -192,12 +200,20 @@
         const standings = {};
         this.players.forEach(p => standings[p] = 0);
 
+        if (!Array.isArray(this.history)) return [];
+
         this.history.forEach(day => {
-          Object.values(day.games).forEach(game => {
-            Object.entries(game.points).forEach(([player, pts]) => {
-              standings[player] = (standings[player] || 0) + pts;
+          if (day && day.games && typeof day.games === 'object') {
+            Object.values(day.games).forEach(game => {
+              if (game && game.points && typeof game.points === 'object') {
+                Object.entries(game.points).forEach(([player, pts]) => {
+                  if (standings.hasOwnProperty(player)) {
+                    standings[player] = (standings[player] || 0) + pts;
+                  }
+                });
+              }
             });
-          });
+          }
         });
 
         return Object.entries(standings)
@@ -212,13 +228,20 @@
           const standings = {};
           this.players.forEach(p => standings[p] = 0);
           
-          this.history.forEach(day => {
-            if (day.games[game]) {
-              Object.entries(day.games[game].points).forEach(([player, pts]) => {
-                standings[player] = (standings[player] || 0) + pts;
-              });
-            }
-          });
+          if (Array.isArray(this.history)) {
+            this.history.forEach(day => {
+              if (day && day.games && day.games[game]) {
+                const gameData = day.games[game];
+                if (gameData.points && typeof gameData.points === 'object') {
+                  Object.entries(gameData.points).forEach(([player, pts]) => {
+                    if (standings.hasOwnProperty(player)) {
+                      standings[player] = (standings[player] || 0) + pts;
+                    }
+                  });
+                }
+              }
+            });
+          }
           
           gameStandings[game] = Object.entries(standings)
             .sort((a, b) => b[1] - a[1])
@@ -282,7 +305,8 @@
       }
 
       getTodaySubmissions() {
-        return Object.values(this.submissions).filter(s => s.date === this.currentDate);
+        if (!this.submissions || typeof this.submissions !== 'object') return [];
+        return Object.values(this.submissions).filter(s => s && s.date === this.currentDate);
       }
 
       hasPlayerSubmitted(player) {
