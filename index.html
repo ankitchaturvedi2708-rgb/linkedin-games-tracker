@@ -54,7 +54,26 @@
           const historyData = await historyRes.json();
 
           if (playersData && Array.isArray(playersData)) this.players = playersData;
-          if (submissionsData && typeof submissionsData === 'object') this.submissions = submissionsData;
+          if (submissionsData && typeof submissionsData === 'object') {
+            // Clean up any duplicate submissions (keep only the latest one per player per day)
+            const cleanedSubmissions = {};
+            Object.entries(submissionsData).forEach(([key, value]) => {
+              if (value && value.player && value.date) {
+                const standardKey = `${value.date}-${value.player}`;
+                // If duplicate exists, keep the one with latest timestamp
+                if (!cleanedSubmissions[standardKey] || 
+                    (value.timestamp && (!cleanedSubmissions[standardKey].timestamp || value.timestamp > cleanedSubmissions[standardKey].timestamp))) {
+                  cleanedSubmissions[standardKey] = value;
+                }
+              }
+            });
+            this.submissions = cleanedSubmissions;
+            
+            // If we cleaned up duplicates, save the cleaned version back to Firebase
+            if (Object.keys(cleanedSubmissions).length !== Object.keys(submissionsData).length) {
+              this.saveToFirebase('submissions', cleanedSubmissions);
+            }
+          }
           if (historyData && Array.isArray(historyData)) this.history = historyData;
 
           // Update player scores if a player is selected
