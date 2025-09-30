@@ -36,7 +36,7 @@
         if (auth === 'true') {
           this.isAuthenticated = true;
           await this.loadFromFirebase();
-          setInterval(() => this.loadFromFirebase(), 5000); // Sync every 5 seconds
+          setInterval(() => this.loadFromFirebase(), 3000); // Sync every 3 seconds for real-time updates
         }
         this.render();
       }
@@ -89,7 +89,7 @@
           sessionStorage.setItem('gamesTrackerAuth', 'true');
           this.passwordError = '';
           this.loadFromFirebase();
-          setInterval(() => this.loadFromFirebase(), 5000);
+          setInterval(() => this.loadFromFirebase(), 3000); // Sync every 3 seconds
         } else {
           this.passwordError = 'Incorrect password. Please try again.';
           this.passwordInput = '';
@@ -178,16 +178,18 @@
             const sorted = [...times].sort((a, b) => a.time - b.time);
             const points = {};
             
-            if (times.length === 1) {
-              points[sorted[0].player] = 5;
-            } else if (times.length === 2) {
-              points[sorted[0].player] = 5;
-              points[sorted[1].player] = 3;
-            } else {
-              points[sorted[0].player] = 5;
-              points[sorted[1].player] = 3;
-              points[sorted[2].player] = 1;
-            }
+            // Award points to ALL players based on their position
+            sorted.forEach((entry, index) => {
+              if (index === 0) {
+                points[entry.player] = 5; // 1st place
+              } else if (index === 1) {
+                points[entry.player] = 3; // 2nd place
+              } else if (index === 2) {
+                points[entry.player] = 1; // 3rd place
+              } else {
+                points[entry.player] = 0; // 4th place and beyond (tracked but no points)
+              }
+            });
             
             dayData.games[game] = { times, points };
           }
@@ -200,21 +202,36 @@
         const standings = {};
         this.players.forEach(p => standings[p] = 0);
 
-        if (!Array.isArray(this.history)) return [];
+        // Calculate from finalized history
+        if (Array.isArray(this.history)) {
+          this.history.forEach(day => {
+            if (day && day.games && typeof day.games === 'object') {
+              Object.values(day.games).forEach(game => {
+                if (game && game.points && typeof game.points === 'object') {
+                  Object.entries(game.points).forEach(([player, pts]) => {
+                    if (standings.hasOwnProperty(player)) {
+                      standings[player] = (standings[player] || 0) + pts;
+                    }
+                  });
+                }
+              });
+            }
+          });
+        }
 
-        this.history.forEach(day => {
-          if (day && day.games && typeof day.games === 'object') {
-            Object.values(day.games).forEach(game => {
-              if (game && game.points && typeof game.points === 'object') {
-                Object.entries(game.points).forEach(([player, pts]) => {
-                  if (standings.hasOwnProperty(player)) {
-                    standings[player] = (standings[player] || 0) + pts;
-                  }
-                });
-              }
-            });
-          }
-        });
+        // Add points from today's submissions (live calculation)
+        const todayResults = this.calculateDailyResults();
+        if (todayResults && todayResults.games) {
+          Object.values(todayResults.games).forEach(game => {
+            if (game && game.points) {
+              Object.entries(game.points).forEach(([player, pts]) => {
+                if (standings.hasOwnProperty(player)) {
+                  standings[player] = (standings[player] || 0) + pts;
+                }
+              });
+            }
+          });
+        }
 
         return Object.entries(standings)
           .sort((a, b) => b[1] - a[1])
@@ -228,6 +245,7 @@
           const standings = {};
           this.players.forEach(p => standings[p] = 0);
           
+          // Calculate from finalized history
           if (Array.isArray(this.history)) {
             this.history.forEach(day => {
               if (day && day.games && day.games[game]) {
@@ -241,6 +259,19 @@
                 }
               }
             });
+          }
+
+          // Add points from today's submissions (live calculation)
+          const todayResults = this.calculateDailyResults();
+          if (todayResults && todayResults.games && todayResults.games[game]) {
+            const todayGameData = todayResults.games[game];
+            if (todayGameData.points) {
+              Object.entries(todayGameData.points).forEach(([player, pts]) => {
+                if (standings.hasOwnProperty(player)) {
+                  standings[player] = (standings[player] || 0) + pts;
+                }
+              });
+            }
           }
           
           gameStandings[game] = Object.entries(standings)
@@ -528,6 +559,13 @@
                       <span class="text-3xl font-bold text-indigo-600">${standing.points} pts</span>
                     </div>
                   `).join('')}
+                  ${todaySubmissions.length > 0 ? `
+                    <div class="mt-4 p-3 bg-blue-100 border-l-4 border-blue-500 rounded">
+                      <p class="text-sm text-blue-800">
+                        <strong>🔴 Live Updates:</strong> Today's submissions are included in the standings above. Scores update every 3 seconds!
+                      </p>
+                    </div>
+                  ` : ''}
                 </div>
 
                 <div class="mb-4">
@@ -601,7 +639,11 @@
                                   </span>
                                   <div class="flex items-center gap-2">
                                     <span class="text-sm text-gray-600">${this.formatTime(t.time)}</span>
-                                    ${data.points[t.player] ? `<span class="text-xs font-bold text-green-600">+${data.points[t.player]}</span>` : ''}
+                                    ${data.points[t.player] !== undefined ? `
+                                      <span class="text-xs font-bold ${data.points[t.player] > 0 ? 'text-green-600' : 'text-gray-500'}">
+                                        ${data.points[t.player] > 0 ? `+${data.points[t.player]}` : '0'}
+                                      </span>
+                                    ` : ''}
                                   </div>
                                 </div>
                               `).join('')}
