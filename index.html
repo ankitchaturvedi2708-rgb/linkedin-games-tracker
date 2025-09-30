@@ -626,8 +626,8 @@
                     <label class="block text-sm font-medium mb-2">Filter by Date:</label>
                     <div class="flex items-center gap-3">
                       <select id="historyFilter" class="flex-1 px-4 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500">
-                        <option value="all">All Dates (${this.history.length} days)</option>
-                        ${this.history.map(h => h.date).sort((a, b) => b.localeCompare(a)).map(date => `
+                        <option value="all" ${this.historyFilter === 'all' ? 'selected' : ''}>All Dates (${this.history.length} days)</option>
+                        ${[...new Set(this.history.map(h => h.date))].sort((a, b) => b.localeCompare(a)).map(date => `
                           <option value="${date}" ${this.historyFilter === date ? 'selected' : ''}>
                             ${new Date(date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' })}
                           </option>
@@ -645,27 +645,27 @@
                     ${filteredHistory.length === 0 ? `
                       <p class="text-gray-500 text-center py-8">No data for selected date.</p>
                     ` : filteredHistory.map(day => `
-                      <div class="bg-gray-50 rounded-lg p-4">
-                        <h3 class="font-semibold text-lg mb-3">${new Date(day.date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</h3>
-                        <div class="grid grid-cols-2 gap-4">
+                      <div class="bg-gray-50 rounded-lg p-3">
+                        <h3 class="font-semibold text-base mb-2">${new Date(day.date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</h3>
+                        <div class="grid grid-cols-2 gap-3">
                           ${Object.entries(day.games).map(([game, data]) => `
-                            <div class="bg-white rounded p-3">
-                              <h4 class="font-semibold mb-2 text-indigo-600">${game}</h4>
-                              ${data.times.sort((a, b) => a.time - b.time).map((t, idx) => `
-                                <div class="flex justify-between items-center py-1">
-                                  <span class="${idx < 3 ? 'font-medium' : 'text-gray-600'}">
+                            <div class="bg-white rounded p-2">
+                              <h4 class="font-semibold mb-2 text-sm text-indigo-600">${game}</h4>
+                              ${data.times && data.times.length > 0 ? data.times.sort((a, b) => a.time - b.time).map((t, idx) => `
+                                <div class="flex justify-between items-center py-0.5">
+                                  <span class="${idx < 3 ? 'font-medium text-xs' : 'text-gray-600 text-xs'}">
                                     ${idx + 1}. ${t.player}
                                   </span>
-                                  <div class="flex items-center gap-2">
-                                    <span class="text-sm text-gray-600">${this.formatTime(t.time)}</span>
-                                    ${data.points[t.player] !== undefined ? `
-                                      <span class="text-xs font-bold ${data.points[t.player] > 0 ? 'text-green-600' : 'text-gray-500'}">
+                                  <div class="flex items-center gap-1">
+                                    <span class="text-xs text-gray-600">${this.formatTime(t.time)}</span>
+                                    ${data.points && data.points[t.player] !== undefined ? `
+                                      <span class="text-[10px] font-bold ${data.points[t.player] > 0 ? 'text-green-600' : 'text-gray-500'}">
                                         ${data.points[t.player] > 0 ? `+${data.points[t.player]}` : '0'}
                                       </span>
                                     ` : ''}
                                   </div>
                                 </div>
-                              `).join('')}
+                              `).join('') : '<p class="text-gray-500 text-xs">No submissions for this game</p>'}
                             </div>
                           `).join('')}
                         </div>
