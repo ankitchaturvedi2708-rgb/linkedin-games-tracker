@@ -1,0 +1,674 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LinkedIn Games Tracker</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gradient-to-br from-blue-50 to-indigo-100 min-h-screen">
+  <div id="app"></div>
+
+  <script>
+    const FIREBASE_URL = 'https://linkedin-games-tracker-default-rtdb.asia-southeast1.firebasedatabase.app';
+    const GAMES = ['Queens', 'Zip', 'Tango', 'Mini Sudoku'];
+    const CORRECT_PASSWORD = 'Ankitcoding@2708';
+
+    class GamesTracker {
+      constructor() {
+        this.isAuthenticated = false;
+        this.players = ['Player 1', 'Player 2', 'Player 3', 'Player 4'];
+        this.submissions = {};
+        this.history = [];
+        this.currentDate = new Date().toISOString().split('T')[0];
+        this.selectedPlayer = null;
+        this.playerScores = {};
+        this.historyFilter = 'all';
+        this.editingPlayers = false;
+        this.passwordInput = '';
+        this.passwordError = '';
+        
+        this.init();
+      }
+
+      async init() {
+        const auth = sessionStorage.getItem('gamesTrackerAuth');
+        if (auth === 'true') {
+          this.isAuthenticated = true;
+          await this.loadFromFirebase();
+          setInterval(() => this.loadFromFirebase(), 5000); // Sync every 5 seconds
+        }
+        this.render();
+      }
+
+      async loadFromFirebase() {
+        try {
+          const [playersRes, submissionsRes, historyRes] = await Promise.all([
+            fetch(`${FIREBASE_URL}/players.json`),
+            fetch(`${FIREBASE_URL}/submissions.json`),
+            fetch(`${FIREBASE_URL}/history.json`)
+          ]);
+
+          const playersData = await playersRes.json();
+          const submissionsData = await submissionsRes.json();
+          const historyData = await historyRes.json();
+
+          if (playersData) this.players = playersData;
+          if (submissionsData) this.submissions = submissionsData;
+          if (historyData) this.history = historyData;
+
+          this.render();
+        } catch (error) {
+          console.error('Error loading from Firebase:', error);
+        }
+      }
+
+      async saveToFirebase(path, data) {
+        try {
+          await fetch(`${FIREBASE_URL}/${path}.json`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+          });
+        } catch (error) {
+          console.error('Error saving to Firebase:', error);
+        }
+      }
+
+      handleLogin() {
+        if (this.passwordInput === CORRECT_PASSWORD) {
+          this.isAuthenticated = true;
+          sessionStorage.setItem('gamesTrackerAuth', 'true');
+          this.passwordError = '';
+          this.loadFromFirebase();
+          setInterval(() => this.loadFromFirebase(), 5000);
+        } else {
+          this.passwordError = 'Incorrect password. Please try again.';
+          this.passwordInput = '';
+        }
+        this.render();
+      }
+
+      handleLogout() {
+        this.isAuthenticated = false;
+        sessionStorage.removeItem('gamesTrackerAuth');
+        this.passwordInput = '';
+        this.render();
+      }
+
+      submitPlayerScores() {
+        if (!this.selectedPlayer) {
+          alert('Please select a player first');
+          return;
+        }
+
+        const validScores = Object.entries(this.playerScores).filter(([_, value]) => value && value.trim() !== '');
+        
+        if (validScores.length === 0) {
+          alert('Please enter at least one score');
+          return;
+        }
+
+        const submissionKey = `${this.currentDate}-${this.selectedPlayer}`;
+        const isEditing = this.submissions[submissionKey] !== undefined;
+        
+        this.submissions[submissionKey] = {
+          player: this.selectedPlayer,
+          date: this.currentDate,
+          scores: { ...this.playerScores }
+        };
+
+        this.saveToFirebase('submissions', this.submissions);
+        alert(isEditing ? `Scores updated for ${this.selectedPlayer}!` : `Scores submitted for ${this.selectedPlayer}!`);
+        this.render();
+      }
+
+      finalizeDailyScores() {
+        const dayData = this.calculateDailyResults();
+        
+        if (!dayData) {
+          alert('No scores submitted yet for today');
+          return;
+        }
+
+        const alreadyExists = this.history.some(h => h.date === this.currentDate);
+        if (alreadyExists) {
+          alert('Scores for this date have already been finalized!');
+          return;
+        }
+
+        this.history = [...this.history, dayData].sort((a, b) => b.date.localeCompare(a.date));
+        
+        Object.keys(this.submissions).forEach(key => {
+          if (key.startsWith(this.currentDate)) {
+            delete this.submissions[key];
+          }
+        });
+
+        this.saveToFirebase('history', this.history);
+        this.saveToFirebase('submissions', this.submissions);
+        alert('Daily scores finalized!');
+        this.render();
+      }
+
+      calculateDailyResults() {
+        const todaySubmissions = Object.values(this.submissions).filter(s => s.date === this.currentDate);
+        
+        if (todaySubmissions.length === 0) return null;
+
+        const dayData = { date: this.currentDate, games: {} };
+        
+        GAMES.forEach(game => {
+          const times = todaySubmissions
+            .map(sub => ({
+              player: sub.player,
+              time: parseFloat(sub.scores[game] || 999999)
+            }))
+            .filter(t => t.time < 999999);
+
+          if (times.length > 0) {
+            const sorted = [...times].sort((a, b) => a.time - b.time);
+            const points = {};
+            
+            if (times.length === 1) {
+              points[sorted[0].player] = 5;
+            } else if (times.length === 2) {
+              points[sorted[0].player] = 5;
+              points[sorted[1].player] = 3;
+            } else {
+              points[sorted[0].player] = 5;
+              points[sorted[1].player] = 3;
+              points[sorted[2].player] = 1;
+            }
+            
+            dayData.games[game] = { times, points };
+          }
+        });
+
+        return Object.keys(dayData.games).length > 0 ? dayData : null;
+      }
+
+      getOverallStandings() {
+        const standings = {};
+        this.players.forEach(p => standings[p] = 0);
+
+        this.history.forEach(day => {
+          Object.values(day.games).forEach(game => {
+            Object.entries(game.points).forEach(([player, pts]) => {
+              standings[player] = (standings[player] || 0) + pts;
+            });
+          });
+        });
+
+        return Object.entries(standings)
+          .sort((a, b) => b[1] - a[1])
+          .map(([player, points]) => ({ player, points }));
+      }
+
+      getGameWiseStandings() {
+        const gameStandings = {};
+        
+        GAMES.forEach(game => {
+          const standings = {};
+          this.players.forEach(p => standings[p] = 0);
+          
+          this.history.forEach(day => {
+            if (day.games[game]) {
+              Object.entries(day.games[game].points).forEach(([player, pts]) => {
+                standings[player] = (standings[player] || 0) + pts;
+              });
+            }
+          });
+          
+          gameStandings[game] = Object.entries(standings)
+            .sort((a, b) => b[1] - a[1])
+            .map(([player, points]) => ({ player, points }));
+        });
+        
+        return gameStandings;
+      }
+
+      addPlayer() {
+        this.players.push(`Player ${this.players.length + 1}`);
+        this.saveToFirebase('players', this.players);
+        this.render();
+      }
+
+      removePlayer(index) {
+        if (this.players.length <= 2) {
+          alert('Must have at least 2 players');
+          return;
+        }
+        
+        const playerToRemove = this.players[index];
+        
+        const hasData = Object.values(this.submissions).some(s => s.player === playerToRemove) ||
+                       this.history.some(day => Object.values(day.games).some(game => 
+                         game.times.some(t => t.player === playerToRemove)));
+        
+        if (hasData && !confirm(`${playerToRemove} has existing scores. Remove this player and delete all their data?`)) {
+          return;
+        }
+
+        this.players = this.players.filter((_, i) => i !== index);
+        
+        Object.keys(this.submissions).forEach(key => {
+          if (this.submissions[key].player === playerToRemove) {
+            delete this.submissions[key];
+          }
+        });
+
+        if (this.selectedPlayer === playerToRemove) {
+          this.selectedPlayer = null;
+          this.playerScores = {};
+        }
+
+        this.saveToFirebase('players', this.players);
+        this.saveToFirebase('submissions', this.submissions);
+        this.render();
+      }
+
+      updatePlayerName(index, newName) {
+        this.players[index] = newName || `Player ${index + 1}`;
+        this.saveToFirebase('players', this.players);
+        this.render();
+      }
+
+      selectPlayer(player) {
+        this.selectedPlayer = player;
+        const existingSubmission = this.submissions[`${this.currentDate}-${player}`];
+        this.playerScores = existingSubmission ? { ...existingSubmission.scores } : {};
+        this.render();
+      }
+
+      getTodaySubmissions() {
+        return Object.values(this.submissions).filter(s => s.date === this.currentDate);
+      }
+
+      hasPlayerSubmitted(player) {
+        return this.getTodaySubmissions().some(s => s.player === player);
+      }
+
+      formatTime(seconds) {
+        const mins = Math.floor(seconds / 60);
+        const secs = Math.floor(seconds % 60);
+        return `${mins}:${secs.toString().padStart(2, '0')}`;
+      }
+
+      getFilteredHistory() {
+        if (this.historyFilter === 'all') return this.history;
+        return this.history.filter(h => h.date === this.historyFilter);
+      }
+
+      render() {
+        const app = document.getElementById('app');
+        
+        if (!this.isAuthenticated) {
+          app.innerHTML = this.renderLogin();
+          this.attachLoginListeners();
+          return;
+        }
+
+        app.innerHTML = this.renderMain();
+        this.attachMainListeners();
+      }
+
+      renderLogin() {
+        return `
+          <div class="min-h-screen flex items-center justify-center p-4">
+            <div class="bg-white rounded-2xl shadow-xl p-8 max-w-md w-full">
+              <div class="flex items-center justify-center gap-3 mb-6">
+                <svg class="text-indigo-600" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                  <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                </svg>
+                <h1 class="text-2xl font-bold text-gray-800">Games Tracker Login</h1>
+              </div>
+              <p class="text-gray-600 mb-6 text-center">Enter the password to access the tracker</p>
+              <input
+                type="password"
+                id="passwordInput"
+                placeholder="Enter password"
+                class="w-full px-4 py-3 border rounded-lg mb-4 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+              />
+              ${this.passwordError ? `<p class="text-red-600 text-sm mb-4">${this.passwordError}</p>` : ''}
+              <button
+                id="loginBtn"
+                class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 rounded-lg transition"
+              >
+                Login
+              </button>
+            </div>
+          </div>
+        `;
+      }
+
+      renderMain() {
+        const todaySubmissions = this.getTodaySubmissions();
+        const overallStandings = this.getOverallStandings();
+        const gameWiseStandings = this.getGameWiseStandings();
+        const filteredHistory = this.getFilteredHistory();
+
+        return `
+          <div class="max-w-6xl mx-auto p-4">
+            <div class="bg-white rounded-2xl shadow-xl p-6 mb-6">
+              <div class="flex items-center justify-between mb-6">
+                <div class="flex items-center gap-3">
+                  <svg class="text-yellow-500" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"></path>
+                    <path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"></path>
+                    <path d="M4 22h16"></path>
+                    <path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"></path>
+                    <path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"></path>
+                    <path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"></path>
+                  </svg>
+                  <h1 class="text-3xl font-bold text-gray-800">LinkedIn Games Tracker</h1>
+                </div>
+                <div class="flex gap-2">
+                  <button id="editPlayersBtn" class="px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm">
+                    ${this.editingPlayers ? 'Done' : 'Edit Players'}
+                  </button>
+                  <button id="logoutBtn" class="px-4 py-2 bg-red-100 hover:bg-red-200 text-red-700 rounded-lg text-sm">
+                    Logout
+                  </button>
+                </div>
+              </div>
+
+              ${this.editingPlayers ? `
+                <div class="mb-6 p-4 bg-blue-50 rounded-lg">
+                  <h3 class="font-semibold mb-3">Edit Player Names:</h3>
+                  <div class="grid grid-cols-2 gap-3 mb-3">
+                    ${this.players.map((player, idx) => `
+                      <div class="flex gap-2">
+                        <input
+                          type="text"
+                          value="${player}"
+                          data-player-index="${idx}"
+                          class="player-name-input flex-1 px-3 py-2 border rounded-lg"
+                          placeholder="Player ${idx + 1}"
+                        />
+                        ${this.players.length > 2 ? `
+                          <button data-remove-player="${idx}" class="px-3 py-2 bg-red-100 hover:bg-red-200 text-red-700 rounded-lg text-sm">✕</button>
+                        ` : ''}
+                      </div>
+                    `).join('')}
+                  </div>
+                  <button id="addPlayerBtn" class="w-full px-4 py-2 bg-green-100 hover:bg-green-200 text-green-700 rounded-lg text-sm font-medium">
+                    + Add Player
+                  </button>
+                </div>
+              ` : ''}
+
+              <div class="mb-8">
+                <div class="flex items-center gap-2 mb-4">
+                  <svg class="text-indigo-600" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"></path>
+                    <circle cx="12" cy="7" r="4"></circle>
+                  </svg>
+                  <h2 class="text-xl font-semibold">Submit Your Scores</h2>
+                  <input
+                    type="date"
+                    id="currentDate"
+                    value="${this.currentDate}"
+                    class="ml-auto px-3 py-2 border rounded-lg"
+                  />
+                </div>
+
+                <div class="mb-4">
+                  <label class="block text-sm font-medium mb-2">Select Player:</label>
+                  <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+                    ${this.players.map(player => `
+                      <button
+                        data-select-player="${player}"
+                        class="px-4 py-3 rounded-lg font-medium transition relative ${
+                          this.selectedPlayer === player
+                            ? 'bg-indigo-600 text-white'
+                            : this.hasPlayerSubmitted(player)
+                            ? 'bg-green-100 text-green-700 border-2 border-green-500'
+                            : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
+                        }"
+                      >
+                        ${player}
+                        ${this.hasPlayerSubmitted(player) ? '<span class="absolute -top-1 -right-1 bg-green-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">✓</span>' : ''}
+                      </button>
+                    `).join('')}
+                  </div>
+                </div>
+
+                ${this.selectedPlayer ? `
+                  <div class="bg-indigo-50 rounded-lg p-4">
+                    <h3 class="font-semibold mb-1">
+                      ${this.hasPlayerSubmitted(this.selectedPlayer) ? `Edit Scores for ${this.selectedPlayer}:` : `Enter Scores for ${this.selectedPlayer}:`}
+                    </h3>
+                    ${this.hasPlayerSubmitted(this.selectedPlayer) ? '<p class="text-sm text-green-600 mb-3">✓ Already submitted - you can edit the scores below</p>' : ''}
+                    <div class="grid grid-cols-2 gap-3 mb-4">
+                      ${GAMES.map(game => `
+                        <div>
+                          <label class="block text-sm font-medium mb-1">${game}</label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            data-game="${game}"
+                            value="${this.playerScores[game] || ''}"
+                            placeholder="Time (seconds)"
+                            class="game-score-input w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500"
+                          />
+                        </div>
+                      `).join('')}
+                    </div>
+                    <button id="submitScoresBtn" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-2 rounded-lg transition">
+                      ${this.hasPlayerSubmitted(this.selectedPlayer) ? `Update ${this.selectedPlayer}'s Scores` : `Submit ${this.selectedPlayer}'s Scores`}
+                    </button>
+                  </div>
+                ` : ''}
+
+                <div class="mt-4 p-4 bg-gray-50 rounded-lg">
+                  <h3 class="font-semibold mb-2">Today's Submissions: ${todaySubmissions.length} / ${this.players.length}</h3>
+                  <div class="flex flex-wrap gap-2 mb-3">
+                    ${todaySubmissions.map(sub => `
+                      <span class="px-3 py-1 bg-green-100 text-green-700 rounded-full text-sm">${sub.player} ✓</span>
+                    `).join('')}
+                  </div>
+                  ${todaySubmissions.length > 0 ? `
+                    <button id="finalizeBtn" class="w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-2 rounded-lg transition">
+                      Finalize Today's Scores & Calculate Points
+                    </button>
+                  ` : ''}
+                </div>
+              </div>
+
+              <div class="mb-8">
+                <div class="flex items-center gap-2 mb-2">
+                  <svg class="text-purple-600" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="8" r="6"></circle>
+                    <path d="M15.477 12.89 17 22l-5-3-5 3 1.523-9.11"></path>
+                  </svg>
+                  <h2 class="text-2xl font-bold">Overall Standings</h2>
+                </div>
+                
+                <div class="mb-4 p-2 bg-gray-100 rounded-lg">
+                  <p class="text-xs text-gray-600 text-center">
+                    Point Distribution: 1st Place = 5 points • 2nd Place = 3 points • 3rd Place = 1 point
+                  </p>
+                </div>
+
+                <div class="bg-gradient-to-r from-purple-50 to-pink-50 rounded-lg p-6 shadow-md mb-8">
+                  ${overallStandings.map((standing, idx) => `
+                    <div class="flex items-center justify-between py-4 border-b last:border-b-0">
+                      <div class="flex items-center gap-4">
+                        <span class="text-3xl font-bold ${idx === 0 ? 'text-yellow-500' : idx === 1 ? 'text-gray-400' : idx === 2 ? 'text-amber-600' : 'text-gray-600'}">
+                          ${idx + 1}
+                        </span>
+                        <span class="font-bold text-xl">${standing.player}</span>
+                      </div>
+                      <span class="text-3xl font-bold text-indigo-600">${standing.points} pts</span>
+                    </div>
+                  `).join('')}
+                </div>
+
+                <div class="mb-4">
+                  <h3 class="text-lg font-semibold mb-3 text-gray-700">Game-wise Standings</h3>
+                  <div class="grid grid-cols-2 gap-4">
+                    ${Object.entries(gameWiseStandings).map(([game, standings]) => `
+                      <div class="bg-white rounded-lg p-4 shadow-sm border border-gray-200">
+                        <h4 class="font-semibold text-indigo-600 mb-3 text-center">${game}</h4>
+                        ${standings.map((standing, idx) => `
+                          <div class="flex items-center justify-between py-2 border-b last:border-b-0">
+                            <div class="flex items-center gap-2">
+                              <span class="text-lg font-semibold ${idx === 0 ? 'text-yellow-500' : idx === 1 ? 'text-gray-400' : idx === 2 ? 'text-amber-600' : 'text-gray-600'}">
+                                ${idx + 1}
+                              </span>
+                              <span class="text-sm font-medium">${standing.player}</span>
+                            </div>
+                            <span class="text-sm font-semibold text-indigo-600">${standing.points} pts</span>
+                          </div>
+                        `).join('')}
+                      </div>
+                    `).join('')}
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <div class="flex items-center gap-2 mb-4">
+                  <svg class="text-green-600" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="23 6 13.5 15.5 8.5 10.5 1 18"></polyline>
+                    <polyline points="17 6 23 6 23 12"></polyline>
+                  </svg>
+                  <h2 class="text-xl font-semibold">History</h2>
+                </div>
+                
+                ${this.history.length === 0 ? `
+                  <p class="text-gray-500 text-center py-8">No history yet. Start entering daily scores!</p>
+                ` : `
+                  <div class="mb-4 p-4 bg-gray-50 rounded-lg">
+                    <label class="block text-sm font-medium mb-2">Filter by Date:</label>
+                    <div class="flex items-center gap-3">
+                      <select id="historyFilter" class="flex-1 px-4 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500">
+                        <option value="all">All Dates (${this.history.length} days)</option>
+                        ${this.history.map(h => h.date).sort((a, b) => b.localeCompare(a)).map(date => `
+                          <option value="${date}" ${this.historyFilter === date ? 'selected' : ''}>
+                            ${new Date(date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' })}
+                          </option>
+                        `).join('')}
+                      </select>
+                      ${this.historyFilter !== 'all' ? `
+                        <button id="showAllHistoryBtn" class="px-4 py-2 bg-indigo-100 hover:bg-indigo-200 text-indigo-700 rounded-lg text-sm font-medium">
+                          Show All
+                        </button>
+                      ` : ''}
+                    </div>
+                  </div>
+
+                  <div class="space-y-4">
+                    ${filteredHistory.length === 0 ? `
+                      <p class="text-gray-500 text-center py-8">No data for selected date.</p>
+                    ` : filteredHistory.map(day => `
+                      <div class="bg-gray-50 rounded-lg p-4">
+                        <h3 class="font-semibold text-lg mb-3">${new Date(day.date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</h3>
+                        <div class="grid grid-cols-2 gap-4">
+                          ${Object.entries(day.games).map(([game, data]) => `
+                            <div class="bg-white rounded p-3">
+                              <h4 class="font-semibold mb-2 text-indigo-600">${game}</h4>
+                              ${data.times.sort((a, b) => a.time - b.time).map((t, idx) => `
+                                <div class="flex justify-between items-center py-1">
+                                  <span class="${idx < 3 ? 'font-medium' : 'text-gray-600'}">
+                                    ${idx + 1}. ${t.player}
+                                  </span>
+                                  <div class="flex items-center gap-2">
+                                    <span class="text-sm text-gray-600">${this.formatTime(t.time)}</span>
+                                    ${data.points[t.player] ? `<span class="text-xs font-bold text-green-600">+${data.points[t.player]}</span>` : ''}
+                                  </div>
+                                </div>
+                              `).join('')}
+                            </div>
+                          `).join('')}
+                        </div>
+                      </div>
+                    `).join('')}
+                  </div>
+                `}
+              </div>
+            </div>
+          </div>
+        `;
+      }
+
+      attachLoginListeners() {
+        const passwordInput = document.getElementById('passwordInput');
+        const loginBtn = document.getElementById('loginBtn');
+
+        passwordInput.addEventListener('input', (e) => {
+          this.passwordInput = e.target.value;
+        });
+
+        passwordInput.addEventListener('keypress', (e) => {
+          if (e.key === 'Enter') this.handleLogin();
+        });
+
+        loginBtn.addEventListener('click', () => this.handleLogin());
+      }
+
+      attachMainListeners() {
+        document.getElementById('logoutBtn')?.addEventListener('click', () => this.handleLogout());
+        document.getElementById('editPlayersBtn')?.addEventListener('click', () => {
+          this.editingPlayers = !this.editingPlayers;
+          this.render();
+        });
+
+        document.getElementById('addPlayerBtn')?.addEventListener('click', () => this.addPlayer());
+
+        document.querySelectorAll('[data-remove-player]').forEach(btn => {
+          btn.addEventListener('click', (e) => {
+            const index = parseInt(e.target.getAttribute('data-remove-player'));
+            this.removePlayer(index);
+          });
+        });
+
+        document.querySelectorAll('.player-name-input').forEach(input => {
+          input.addEventListener('change', (e) => {
+            const index = parseInt(e.target.getAttribute('data-player-index'));
+            this.updatePlayerName(index, e.target.value);
+          });
+        });
+
+        document.getElementById('currentDate')?.addEventListener('change', (e) => {
+          this.currentDate = e.target.value;
+          this.selectedPlayer = null;
+          this.playerScores = {};
+          this.render();
+        });
+
+        document.querySelectorAll('[data-select-player]').forEach(btn => {
+          btn.addEventListener('click', (e) => {
+            const player = e.currentTarget.getAttribute('data-select-player');
+            this.selectPlayer(player);
+          });
+        });
+
+        document.querySelectorAll('.game-score-input').forEach(input => {
+          input.addEventListener('input', (e) => {
+            const game = e.target.getAttribute('data-game');
+            this.playerScores[game] = e.target.value;
+          });
+        });
+
+        document.getElementById('submitScoresBtn')?.addEventListener('click', () => this.submitPlayerScores());
+        document.getElementById('finalizeBtn')?.addEventListener('click', () => this.finalizeDailyScores());
+
+        document.getElementById('historyFilter')?.addEventListener('change', (e) => {
+          this.historyFilter = e.target.value;
+          this.render();
+        });
+
+        document.getElementById('showAllHistoryBtn')?.addEventListener('click', () => {
+          this.historyFilter = 'all';
+          this.render();
+        });
+      }
+    }
+
+    new GamesTracker();
+  </script>
+</body>
+</html>
